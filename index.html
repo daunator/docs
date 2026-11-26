@@ -182,12 +182,48 @@
       }
     });
 
+    function formatError(err) {
+      if (err == null) return null;
+      if (typeof err === 'string') return err;
+      if (err instanceof Error) return err.message || String(err);
+      try {
+        return JSON.stringify(err);
+      } catch (_) {
+        return String(err);
+      }
+    }
+
+    function sendError(source, details) {
+      const payload = Object.assign(
+        { type: 'ERROR', source: source, ua: navigator.userAgent },
+        details
+      );
+      try {
+        context.sendCustomMessage(NAMESPACE, undefined, payload);
+      } catch (_) {
+        // No active senders connected.
+      }
+    }
+
     playerManager.addEventListener(
       cast.framework.events.EventType.ERROR,
       (event) => {
         console.error('RomanticCast receiver playback error:', event.detailedErrorCode, event.error, event);
+        sendError('player', {
+          detailedErrorCode: event.detailedErrorCode != null ? event.detailedErrorCode : null,
+          reason: event.reason != null ? event.reason : null,
+          error: formatError(event.error)
+        });
       }
     );
+
+    window.addEventListener('error', (event) => {
+      sendError('window', { error: event.message || formatError(event.error) });
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      sendError('promise', { error: formatError(event.reason) });
+    });
 
     const options = new cast.framework.CastReceiverOptions();
     options.customNamespaces = {
