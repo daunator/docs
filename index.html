@@ -39,6 +39,7 @@
 
     const NAMESPACE = 'urn:x-cast:ro.romanticcast.sleeptimer';
     const DEFAULT_MINUTES = 60;
+    const isCastLite = /castlite/i.test(navigator.userAgent);
 
     const context = cast.framework.CastReceiverContext.getInstance();
     const playerManager = context.getPlayerManager();
@@ -136,6 +137,12 @@
           }
         }
 
+        if (isCastLite && loadRequestData && loadRequestData.media) {
+          // CastLite (GC4A 2.0, e.g. Nest Mini) has no video SourceBuffer; signal audio-only TS.
+          loadRequestData.media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS_AAC;
+          delete loadRequestData.media.hlsVideoSegmentFormat;
+        }
+
         broadcastStatus(false);
         return loadRequestData;
       }
@@ -185,12 +192,30 @@
     function formatError(err) {
       if (err == null) return null;
       if (typeof err === 'string') return err;
-      if (err instanceof Error) return err.message || String(err);
+      if (typeof err !== 'object') return String(err);
       try {
-        return JSON.stringify(err);
+        const out = {};
+        Object.getOwnPropertyNames(err).forEach((k) => {
+          out[k] = err[k];
+        });
+        for (const k in err) {
+          if (!(k in out)) out[k] = err[k];
+        }
+        return JSON.stringify(out);
       } catch (_) {
         return String(err);
       }
+    }
+
+    function mseCaps() {
+      if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported) return 'no-mse';
+      const types = [
+        'video/mp2t; codecs="avc1.64001f, mp4a.40.2"',
+        'video/mp2t; codecs="mp4a.40.2"',
+        'audio/mp4; codecs="mp4a.40.2"',
+        'audio/aac'
+      ];
+      return types.map((t) => t + '=' + MediaSource.isTypeSupported(t)).join('; ');
     }
 
     function sendError(source, details) {
@@ -212,7 +237,7 @@
         sendError('player', {
           detailedErrorCode: event.detailedErrorCode != null ? event.detailedErrorCode : null,
           reason: event.reason != null ? event.reason : null,
-          error: formatError(event.error)
+          error: (formatError(event.error) || 'none') + ' | mse: ' + mseCaps()
         });
       }
     );
@@ -229,9 +254,30 @@
     options.customNamespaces = {
       [NAMESPACE]: cast.framework.system.MessageType.JSON
     };
-    // CAF v3 defaults to Shaka Player for HLS (since v3.0.0156), which rejects muxed H.264+AAC
-    // MPEG-TS streams on audio-only Nest speakers. MPL extracts and plays the AAC track cleanly.
-    options.useShakaForHls = false;
+    // Other speakers keep MPL, which plays muxed H.264+AAC MPEG-TS cleanly. CastLite needs Shaka
+    // so the shakaConfig below (video stripping + transmux) actually takes effect.
+    options.useShakaForHls = isCastLite;
+    if (isCastLite) {
+      // Nest Mini / GC4A 2.0 (CastLite) rejects video SourceBuffers (DetailedErrorCode 110).
+      // Use Shaka Player to strip the H.264 video track and transmux MPEG-TS to audio-only fMP4.
+      const playbackConfig = new cast.framework.PlaybackConfig();
+      playbackConfig.shakaConfig = {
+        manifest: {
+          disableVideo: true,
+          hls: {
+            mediaPlaylistFullMimeType: 'video/mp2t; codecs="mp4a.40.2"'
+          }
+        },
+        mediaSource: {
+          forceTransmux: true
+        },
+        streaming: {
+          bufferingGoal: 10,
+          bufferBehind: 10
+        }
+      };
+      options.playbackConfig = playbackConfig;
+    }
     context.start(options);
   </script>
 </body>
