@@ -182,10 +182,20 @@
       }
     });
 
+    playerManager.addEventListener(
+      cast.framework.events.EventType.ERROR,
+      (event) => {
+        console.error('RomanticCast receiver playback error:', event.detailedErrorCode, event.error, event);
+      }
+    );
+
     const options = new cast.framework.CastReceiverOptions();
     options.customNamespaces = {
       [NAMESPACE]: cast.framework.system.MessageType.JSON
     };
+    // CAF v3 defaults to Shaka Player for HLS (since v3.0.0156), which rejects muxed H.264+AAC
+    // MPEG-TS streams on audio-only Nest speakers. MPL extracts and plays the AAC track cleanly.
+    options.useShakaForHls = false;
     context.start(options);
   </script>
 </body>
